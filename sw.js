@@ -1,12 +1,10 @@
-Claude
-Sw · JS
 const CACHE = 'cuaderno-ventas-v3'; // subir el número cada vez que cambie index.html
 const ARCHIVOS = ['./', 'index.html', 'manifest.json', 'icon.svg'];
- 
+
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(ARCHIVOS)).then(() => self.skipWaiting()));
 });
- 
+
 self.addEventListener('activate', (e) => {
   e.waitUntil(
     caches.keys()
@@ -14,7 +12,7 @@ self.addEventListener('activate', (e) => {
       .then(() => self.clients.claim())
   );
 });
- 
+
 // Primero la copia guardada (funciona sin internet); si no existe, pide a la red y la guarda.
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET') return;
@@ -26,5 +24,3 @@ self.addEventListener('fetch', (e) => {
     }).catch(() => caches.match('index.html')))
   );
 });
- 
-Claude terminó la respuesta
