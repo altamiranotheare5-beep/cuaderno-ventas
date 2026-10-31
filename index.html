@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="es-CL">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#7a3e9d">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg">
+<title>Mi Cuaderno de Ventas</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,sans-serif;font-size:19px;background:#faf7fc;color:#222}
+header{background:#7a3e9d;color:#fff;display:flex;align-items:center;gap:10px;padding:12px 14px;position:sticky;top:0;z-index:5}
+header h1{font-size:22px;margin:0;flex:1}
+header button{background:#fff;color:#7a3e9d;border:0;border-radius:10px;padding:10px 14px;font-size:18px;font-weight:bold}
+main{padding:14px;max-width:640px;margin:auto;padding-bottom:60px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.big{background:#fff;border:2px solid #d9c7e6;border-radius:16px;padding:20px 8px;font-size:20px;font-weight:bold;color:#4b2063;display:flex;flex-direction:column;align-items:center;gap:6px}
+.big .ico{font-size:40px}
+.card{background:#fff;border-radius:14px;padding:14px;margin:10px 0;box-shadow:0 1px 4px #0001;display:flex;gap:12px;align-items:center}
+.card .info{flex:1}
+.card img,.sinfoto{width:72px;height:72px;min-width:72px;object-fit:cover;border-radius:10px;background:#eee;display:flex;align-items:center;justify-content:center;font-size:32px}
+label{display:block;margin:12px 0;font-weight:600}
+input,select{display:block;width:100%;font-size:20px;padding:12px;border:2px solid #bbb;border-radius:12px;margin-top:6px;background:#fff}
+input[type=radio]{width:auto;display:inline-block;margin:0}
+.radio label{font-weight:normal;display:flex;align-items:center;gap:8px}
+fieldset{border:2px solid #ddd;border-radius:12px;margin:14px 0}
+legend{font-weight:bold;padding:0 6px}
+.btn{background:#7a3e9d;color:#fff;border:0;border-radius:14px;padding:16px;font-size:20px;width:100%;font-weight:bold;margin-top:12px}
+.btn2{background:#eee;color:#333;border:0;border-radius:10px;padding:10px 12px;font-size:17px}
+.peligro{background:#fbe3e3 !important;color:#a11 !important}
+.acc{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+.debe{color:#b00020;font-weight:bold}
+.ok{color:#17703a;font-weight:bold}
+.total{font-size:24px;font-weight:bold}
+.kpi{background:#fff;border-radius:14px;padding:12px 14px;margin:8px 0;display:flex;justify-content:space-between;align-items:center;font-size:20px}
+.vacio{text-align:center;color:#777;padding:30px}
+.info{color:#444}
+.aviso{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:#222;color:#fff;padding:14px 20px;border-radius:12px;font-size:18px;z-index:9;max-width:90%;text-align:center}
+.hidden{display:none !important}
+</style>
+</head>
+<body>
+<header>
+  <button id="volver" class="hidden" data-act="volver">← Volver</button>
+  <h1 id="titulo">Mi Cuaderno de Ventas</h1>
+</header>
+<main id="vista"></main>
+<div id="aviso" class="aviso hidden"></div>
+
+<script>
+const KEY = 'cuadernoVentas.v1';
+const $ = (s) => document.querySelector(s);
+let db = cargar();
+let periodo = 'mes';
+let avisoT;
+
+/* ---------- almacenamiento ---------- */
+function cargar() {
+  const vacio = { productos: [], ventas: [], proveedores: [], clientes: [] };
+  try { return Object.assign(vacio, JSON.parse(localStorage.getItem(KEY)) || {}); }
+  catch (e) { return vacio; }
+}
+function guardar() {
+  try { localStorage.setItem(KEY, JSON.stringify(db)); return true; }
+  catch (e) { aviso('No hay espacio para guardar. Haz un respaldo y borra productos con foto que ya no uses.', 5000); return false; }
+}
+
+/* ---------- ayudas ---------- */
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+const clp = (n) => new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP' }).format(Math.round(n || 0));
+function hoy() { // fecha local (no UTC) en formato AAAA-MM-DD
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const redondear = (n) => Math.ceil(n / 100) * 100;
+const saldo = (v) => Math.max(0, v.total - v.pagado);
+const ganancia = (v) => (v.precio - v.costo) * v.cantidad;
+const deudaTotal = () => db.ventas.reduce((a, v) => a + saldo(v), 0);
+const diasDesde = (fecha) => Math.round((new Date(hoy() + 'T00:00') - new Date(fecha + 'T00:00')) / 864e5);
+
+// Devuelve [nombre, monto adeudado, fecha de la deuda más antigua], ordenado por monto
+function deudores() {
+  const m = {};
+  db.ventas.forEach(v => {
+    const s = saldo(v);
+    if (s > 0 && v.cliente) {
+      const d = m[v.cliente] || { monto: 0, desde: v.fecha };
+      d.monto += s;
+      if (v.fecha < d.desde) d.desde = v.fecha;
+      m[v.cliente] = d;
+    }
+  });
+  return Object.entries(m).map(([n, d]) => [n, d.monto, d.desde]).sort((a, b) => b[1] - a[1]);
+}
+
+// Acepta 912345678, 9 1234 5678 o +56 9 1234 5678 y devuelve 569XXXXXXXX
+function normTel(s) {
+  let d = String(s).replace(/\D/g, '');
+  if (d.length === 9 && d[0] === '9') d = '56' + d;
+  return (d.length === 11 && d.startsWith('569')) ? d : '';
+}
+
+function aviso(msg, ms = 2500) {
+  const a = $('#aviso');
+  a.textContent = msg;
+  a.classList.remove('hidden');
+  clearTimeout(avisoT);
+  avisoT = setTimeout(() => a.classList.add('hidden'), ms);
+}
+
+function comprimir(file) { // reduce la foto para que quepa en el almacenamiento del celular
+  return new Promise((res, rej) => {
+    if (!file) return res('');
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const k = Math.min(1, 480 / Math.max(img.width, img.height));
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.width * k);
+      c.height = Math.round(img.height * k);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      res(c.toDataURL('image/jpeg', 0.7));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); rej(new Error('imagen')); };
+    img.src = url;
+  });
+}
+
+async function leerCodigoDeFoto(file) {
+  if (!file) return;
+  if (!('BarcodeDetector' in window)) return aviso('Este navegador no puede leer códigos. Escríbelo a mano.', 4000);
+  try {
+    const bmp = await createImageBitmap(file);
+    const det = new BarcodeDetector({ formats: ['ean_13', 'ean_8', 'upc_a', 'code_128', 'qr_code'] });
+    const r = await det.detect(bmp);
+    if (r.length) { $('#codigo').value = r[0].rawValue; aviso('Código leído ✔'); }
+    else aviso('No encontré un código. Intenta con más luz.', 4000);
+  } catch (e) { aviso('No se pudo leer el código', 4000); }
+}
+
+/* ---------- vistas ---------- */
+const TITULOS = { inicio: 'Mi Cuaderno de Ventas', vender: 'Vender', deben: 'Me deben', productos: 'Productos', nuevoProd: 'Nuevo producto', proveedores: 'Proveedores', precio: 'Calcular precio', ganancias: 'Ganancias', respaldo: 'Respaldo' };
+
+function vInicio() {
+  const botones = [['vender', '🛒', 'Vender'], ['deben', '📒', 'Me deben'], ['productos', '📦', 'Productos'], ['ganancias', '💰', 'Ganancias'], ['proveedores', '🚚', 'Proveedores'], ['precio', '🏷️', 'Calcular precio'], ['respaldo', '💾', 'Respaldo']];
+  const atrasados = deudores().filter(d => diasDesde(d[2]) >= 7);
+  const banner = atrasados.length
+    ? `<div class="card peligro" data-go="deben" style="cursor:pointer"><div>
+         <b>⏰ ${atrasados.length} ${atrasados.length === 1 ? 'persona debe' : 'personas deben'} hace más de una semana</b>
+         <div>Toca aquí para recordarles.</div></div></div>`
+    : '';
+  return `${banner}<div class="grid">${botones.map(([r, i, t]) => `<button class="big" data-go="${r}"><span class="ico">${i}</span>${t}</button>`).join('')}</div>
+    <div class="kpi"><span>Le deben en total</span><b class="debe">${clp(deudaTotal())}</b></div>
+    <div class="kpi"><span>Productos</span><b>${db.productos.length}</b></div>`;
+}
+
+function vVender() {
+  const disp = db.productos.filter(p => p.stock > 0);
+  if (!disp.length) return `<div class="vacio">Primero agrega productos en <b>Productos</b>.</div>`;
+  const nombres = [...new Set(db.ventas.map(v => v.cliente).filter(Boolean))].sort();
+  return `<form data-form="venta">
+    <label>Producto<select name="producto" required data-live="prodVenta"><option value="">— elige —</option>${disp.map(p => `<option value="${p.id}">${esc(p.nombre)} (quedan ${p.stock})</option>`).join('')}</select></label>
+    <label>Cantidad<input name="cantidad" type="number" min="1" value="1" inputmode="numeric" required></label>
+    <label>Precio de venta (el de ganancia del producto)<input name="precio" type="number" min="0" inputmode="numeric" required></label>
+    <label>Nombre de la persona<input name="cliente" list="nombres" autocomplete="off" placeholder="Ej: María Pérez"></label>
+    <datalist id="nombres">${nombres.map(n => `<option value="${esc(n)}">`).join('')}</datalist>
+    <fieldset class="radio"><legend>¿Cómo pagó?</legend>
+      <label><input type="radio" name="pago" value="pagado" checked> Pagó completo</label>
+      <label><input type="radio" name="pago" value="debe"> Quedó debiendo</label>
+    </fieldset>
+    <label>Si dejó algo de dinero, ¿cuánto?<input name="abono" type="number" min="0" inputmode="numeric" value="0"></label>
+    <p class="total" id="totalVenta">Total: $0</p>
+    <button class="btn">Guardar venta</button>
+  </form>`;
+}
+
+function vDeben() {
+  const lista = deudores();
+  if (!lista.length) return `<div class="vacio">Nadie le debe nada 🎉</div>`;
+  return `<p class="total">Total por cobrar: <span class="debe">${clp(deudaTotal())}</span></p>` +
+    lista.map(([n, m, desde]) => {
+      const dias = diasDesde(desde);
+      return `<div class="card"><div class="info"><b>${esc(n)}</b>
+        <div class="debe">Debe ${clp(m)}</div>
+        <div>Desde hace ${dias} ${dias === 1 ? 'día' : 'días'}</div>
+        <div class="acc">
+          <button class="btn2" type="button" data-act="abonar" data-nombre="${esc(n)}">Abonó</button>
+          <button class="btn2" type="button" data-act="recordar" data-nombre="${esc(n)}">📱 Recordar por WhatsApp</button>
+        </div></div></div>`;
+    }).join('');
+}
+
+function vProductos() {
+  const cards = db.productos.map(p => {
+    const gan = db.ventas.filter(v => v.productoId === p.id).reduce((a, v) => a + ganancia(v), 0);
+    const foto = p.foto ? `<img src="${p.foto}" alt="">` : `<div class="sinfoto">📦</div>`;
+    return `<div class="card">${foto}
+      <div class="info"><b>${esc(p.nombre)}</b>
+        <div>Quedan: <b>${p.stock}</b> · Precio: ${clp(p.precio)}</div>
+        <div>Costo: ${clp(p.costo)} · Ganas ${clp(p.precio - p.costo)} por unidad</div>
+        <div>Invertido: ${clp(p.invertido)}</div>
+        <div class="ok">Ganado hasta ahora: ${clp(gan)}</div>
+        <div class="acc">
+          <button class="btn2" type="button" data-act="compra" data-id="${p.id}">+ Compré más</button>
+          <button class="btn2" type="button" data-act="cambiarPrecio" data-id="${p.id}">Cambiar precio</button>
+          <button class="btn2 peligro" type="button" data-act="borrarProd" data-id="${p.id}">Borrar</button>
+        </div></div></div>`;
+  }).join('');
+  return `<button class="btn" data-go="nuevoProd">+ Agregar producto</button>` +
+    (cards || `<div class="vacio">Aún no tienes productos.</div>`);
+}
+
+function vNuevoProd() {
+  return `<form data-form="prod">
+    <label>Foto del producto<input name="foto" type="file" accept="image/*" capture="environment"></label>
+    <label>Nombre<input name="nombre" required placeholder="Ej: Olla de acero 20 cm"></label>
+    <label>Código de barras (opcional)<input name="codigo" id="codigo" inputmode="numeric"></label>
+    <button class="btn2" type="button" data-act="leerCodigo">📷 Leer código desde una foto</button>
+    <input type="file" id="fcod" accept="image/*" capture="environment" data-live="leerCodigo" style="display:none">
+    <label>¿Cuánto te costó cada una?<input name="costo" type="number" min="1" inputmode="numeric" required data-live="multi"></label>
+    <label>¿Cuánto quieres ganar?<select name="multiplo" data-live="multi">
+      <option value="1.5">La mitad más (×1.5)</option>
+      <option value="2" selected>El doble (×2)</option>
+      <option value="2.5">2,5 veces (×2.5)</option>
+      <option value="3">El triple (×3)</option>
+    </select></label>
+    <p class="total" id="precioProd">Escribe el costo para ver el precio de venta</p>
+    <label>¿Cuántas unidades tienes ahora?<input name="cantidad" type="number" min="0" value="1" inputmode="numeric" required></label>
+    <button class="btn">Guardar producto</button>
+  </form>`;
+}
+
+function vProveedores() {
+  const lista = db.proveedores.map(p => `<div class="card"><div class="info"><b>${esc(p.nombre)}</b>
+      <div>${esc(p.vende)}</div>
+      ${p.telefono ? `<div><a href="tel:${esc(p.telefono)}">📞 ${esc(p.telefono)}</a></div>` : ''}</div>
+    <button class="btn2 peligro" type="button" data-act="borrarProv" data-id="${p.id}">Borrar</button></div>`).join('');
+  return `<form data-form="prov">
+    <label>Nombre del proveedor<input name="nombre" required placeholder="Ej: Don Juan"></label>
+    <label>Teléfono (opcional)<input name="telefono" inputmode="tel"></label>
+    <label>Qué le vende<input name="vende" placeholder="Ej: ollas, toallas"></label>
+    <button class="btn">Guardar proveedor</button>
+  </form>${lista || `<div class="vacio">Aún no hay proveedores.</div>`}`;
+}
+
+function vPrecio() {
+  return `<form data-form="noop">
+    <label>¿Cuánto te costó cada unidad?<input id="costo" type="number" min="0" inputmode="numeric" data-live="precio" placeholder="Ej: 2000"></label>
+  </form>
+  <div id="tablaPrecio" class="vacio">Escribe el costo para ver los precios sugeridos.</div>`;
+}
+
+function vGanancias() {
+  const h = hoy();
+  const v = db.ventas.filter(x => periodo === 'todo' || (periodo === 'hoy' ? x.fecha === h : x.fecha.slice(0, 7) === h.slice(0, 7)));
+  const vend = v.reduce((a, x) => a + x.total, 0);
+  const gan = v.reduce((a, x) => a + ganancia(x), 0);
+  const cob = v.reduce((a, x) => a + x.pagado, 0);
+  const sel = [['hoy', 'Hoy'], ['mes', 'Este mes'], ['todo', 'Todo']].map(([k, t]) => `<option value="${k}" ${k === periodo ? 'selected' : ''}>${t}</option>`).join('');
+  const lista = v.slice().reverse().map(x => `<div class="card"><div class="info"><b>${esc(x.producto)} × ${x.cantidad}</b>
+      <div>${esc(x.cliente) || 'Sin nombre'} · ${x.fecha}</div>
+      <div>${clp(x.total)} ${x.pagado < x.total ? `<span class="debe">(debe ${clp(x.total - x.pagado)})</span>` : '<span class="ok">(pagado)</span>'}</div></div>
+      <button class="btn2 peligro" type="button" data-act="borrarVenta" data-id="${x.id}">Borrar</button></div>`).join('');
+  return `<label>Ver<select data-live="periodo">${sel}</select></label>
+    <div class="kpi"><span>Vendido</span><b>${clp(vend)}</b></div>
+    <div class="kpi"><span>Ganancia</span><b class="ok">${clp(gan)}</b></div>
+    <div class="kpi"><span>Cobrado</span><b>${clp(cob)}</b></div>
+    <div class="kpi"><span>Le deben (total)</span><b class="debe">${clp(deudaTotal())}</b></div>
+    <h3>Ventas</h3>
+    ${lista || `<div class="vacio">No hay ventas en este período.</div>`}`;
+}
+
+function vRespaldo() {
+  return `<p>Guarda una copia de tus datos en el celular o en tu Google Drive. Así no los pierdes si se borra el navegador.</p>
+    <button class="btn" type="button" data-act="exportar">💾 Guardar respaldo</button>
+    <h3>Restaurar un respaldo</h3>
+    <p>Úsalo solo si cambiaste de celular o perdiste los datos. Reemplaza lo que hay ahora.</p>
+    <input type="file" accept="application/json,.json" data-live="restaurar">
+    <p class="info">Datos guardados: ${db.ventas.length} ventas y ${db.productos.length} productos.</p>`;
+}
+
+const VISTAS = { inicio: vInicio, vender: vVender, deben: vDeben, productos: vProductos, nuevoProd: vNuevoProd, proveedores: vProveedores, precio: vPrecio, ganancias: vGanancias, respaldo: vRespaldo };
+
+function ruta() { const h = (location.hash || '#inicio').slice(1); return VISTAS[h] ? h : 'inicio'; }
+function ir(v) { location.hash = v; }
+function render() {
+  const r = ruta();
+  $('#titulo').textContent = TITULOS[r];
+  $('#volver').classList.toggle('hidden', r === 'inicio');
+  $('#vista').innerHTML = VISTAS[r]();
+  if (r === 'vender') actualizarTotal($('form'));
+}
+window.addEventListener('hashchange', render);
+
+/* ---------- acciones ---------- */
+function actualizarTotal(f) {
+  const t = (+f.precio.value || 0) * (+f.cantidad.value || 0);
+  const quedaDebiendo = f.pago.value === 'debe' ? Math.max(0, t - (+f.abono.value || 0)) : 0;
+  $('#totalVenta').innerHTML = `Total: ${clp(t)}${quedaDebiendo ? `<br><span class="debe">Quedará debiendo: ${clp(quedaDebiendo)}</span>` : ''}`;
+}
+
+function actualizarPrecioProd(f) {
+  const c = +f.costo.value || 0;
+  const pv = redondear(c * (+f.multiplo.value));
+  $('#precioProd').innerHTML = c > 0
+    ? `Precio de venta: <b>${clp(pv)}</b><br><small class="ok">Ganas ${clp(pv - c)} por unidad</small>`
+    : 'Escribe el costo para ver el precio de venta';
+}
+
+function actualizarEstimador() {
+  const costo = +$('#costo').value;
+  const box = $('#tablaPrecio');
+  if (!(costo > 0)) { box.className = 'vacio'; box.textContent = 'Escribe el costo para ver los precios sugeridos.'; return; }
+  box.className = '';
+  box.innerHTML = [2, 1.5, 2.5, 3].sort((a, b) => a - b).map(k => {
+    const pv = redondear(costo * k);
+    return `<div class="kpi"><span>×${k} (ganancia de ${Math.round((k - 1) * 100)}%)</span>
+      <span style="text-align:right"><b>${clp(pv)}</b><br><small class="ok">Ganas ${clp(pv - costo)} por unidad</small></span></div>`;
+  }).join('');
+}
+
+function guardarVenta(f) {
+  const p = db.productos.find(x => x.id === f.producto.value);
+  const cant = Math.floor(+f.cantidad.value);
+  const precio = Math.round(+f.precio.value);
+  if (!p) return aviso('Elige un producto');
+  if (!(cant >= 1)) return aviso('La cantidad debe ser al menos 1');
+  if (cant > p.stock) return aviso(`Solo quedan ${p.stock} de ${p.nombre}`);
+  if (!(precio > 0)) return aviso('Escribe el precio');
+  const total = precio * cant;
+  const debe = f.pago.value === 'debe';
+  const pagado = debe ? Math.min(total, Math.max(0, Math.round(+f.abono.value || 0))) : total;
+  const cliente = f.cliente.value.trim();
+  if (pagado < total && !cliente) return aviso('Escribe el nombre de la persona que debe');
+  p.stock -= cant;
+  db.ventas.push({ id: uid(), fecha: hoy(), productoId: p.id, producto: p.nombre, cantidad: cant, precio, costo: p.costo, total, pagado, cliente });
+  guardar();
+  aviso(pagado < total ? 'Venta anotada. Quedó debiendo ✔' : 'Venta anotada ✔');
+  render();
+}
+
+async function guardarProd(f) {
+  const nombre = f.nombre.value.trim();
+  const cant = Math.floor(+f.cantidad.value);
+  const costo = Math.round(+f.costo.value);
+  const multiplo = +f.multiplo.value;
+  if (!nombre) return aviso('Escribe el nombre');
+  if (!(cant >= 0) || !(costo > 0)) return aviso('Revisa cantidad y costo');
+  const precio = redondear(costo * multiplo); // precio de ganancia
+  let foto = '';
+  try { foto = await comprimir(f.foto.files[0]); }
+  catch (e) { aviso('No se pudo leer la foto; se guarda sin foto', 3500); }
+  db.productos.push({ id: uid(), nombre, codigo: f.codigo.value.trim(), foto, stock: cant, costo, multiplo, precio, invertido: cant * costo });
+  if (!guardar()) return;
+  aviso('Producto guardado ✔');
+  ir('productos');
+}
+
+function guardarProv(f) {
+  const nombre = f.nombre.value.trim();
+  if (!nombre) return aviso('Escribe el nombre del proveedor');
+  db.proveedores.push({ id: uid(), nombre, telefono: f.telefono.value.trim(), vende: f.vende.value.trim() });
+  guardar();
+  aviso('Proveedor guardado ✔');
+  render();
+}
+
+function abonar(nombre) {
+  const monto = Math.round(Number(prompt(`¿Cuánto pagó ${nombre}?`)));
+  if (!(monto > 0)) return;
+  let resto = monto;
+  db.ventas.filter(v => v.cliente === nombre && saldo(v) > 0)
+    .sort((a, b) => a.fecha.localeCompare(b.fecha))
+    .forEach(v => { const p = Math.min(resto, saldo(v)); v.pagado += p; resto -= p; });
+  guardar();
+  aviso(`Abono de ${clp(monto)} anotado` + (resto > 0 ? `. Sobraron ${clp(resto)}` : ''), 3500);
+  render();
+}
+
+// Abre WhatsApp con un mensaje de cobro. Pide el número la primera vez y lo guarda.
+function recordar(nombre) {
+  const monto = (deudores().find(d => d[0] === nombre) || [0, 0])[1];
+  let c = db.clientes.find(x => x.nombre === nombre);
+  let tel = c ? c.telefono : '';
+  if (!tel) {
+    const raw = prompt(`Número de WhatsApp de ${nombre} (ej: 9 1234 5678).\nDéjalo vacío para elegir el contacto después.`);
+    if (raw === null) return;
+    if (raw.trim()) {
+      tel = normTel(raw);
+      if (!tel) return aviso('Ese número no parece válido', 3500);
+    }
+    if (!c) { c = { nombre, telefono: '' }; db.clientes.push(c); }
+    c.telefono = tel;
+    guardar();
+  }
+  const msg = `Hola ${nombre}, le recuerdo que tiene un saldo pendiente de ${clp(monto)}. ¡Muchas gracias!`;
+  window.open(`https://wa.me/${tel}?text=${encodeURIComponent(msg)}`, '_blank');
+}
+
+function compra(id) {
+  const p = db.productos.find(x => x.id === id);
+  if (!p) return;
+  const q = Math.floor(Number(prompt(`¿Cuántas unidades de ${p.nombre} compraste?`)));
+  if (!(q > 0)) return;
+  const c = Math.round(Number(prompt('¿A cuánto te costó cada una?', p.costo)));
+  if (!(c > 0)) return;
+  p.stock += q;
+  p.invertido += q * c;
+  p.costo = c;
+  p.precio = redondear(c * (p.multiplo || 2)); // mantiene el precio de ganancia
+  guardar();
+  aviso(`Compra anotada. Nuevo precio: ${clp(p.precio)}`, 3500);
+  render();
+}
+
+function cambiarPrecio(id) {
+  const p = db.productos.find(x => x.id === id);
+  if (!p) return;
+  const v = Math.round(Number(prompt('Nuevo precio de venta', p.precio)));
+  if (!(v > 0)) return;
+  p.precio = v;
+  guardar();
+  render();
+}
+
+function borrarProd(id) {
+  if (!confirm('¿Borrar este producto? Las ventas anteriores se mantienen.')) return;
+  db.productos = db.productos.filter(x => x.id !== id);
+  guardar(); render();
+}
+
+function borrarProv(id) {
+  if (!confirm('¿Borrar este proveedor?')) return;
+  db.proveedores = db.proveedores.filter(x => x.id !== id);
+  guardar(); render();
+}
+
+function borrarVenta(id) {
+  const v = db.ventas.find(x => x.id === id);
+  if (!v || !confirm('¿Borrar esta venta? Se devuelven las unidades al stock.')) return;
+  const p = db.productos.find(x => x.id === v.productoId);
+  if (p) p.stock += v.cantidad;
+  db.ventas = db.ventas.filter(x => x.id !== id);
+  guardar(); render();
+}
+
+function exportar() {
+  const blob = new Blob([JSON.stringify(db)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `respaldo-ventas-${hoy()}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+function restaurar(file) {
+  if (!file) return;
+  const r = new FileReader();
+  r.onload = () => {
+    try {
+      const d = JSON.parse(r.result);
+      if (!Array.isArray(d.productos) || !Array.isArray(d.ventas)) throw new Error('formato');
+      if (!confirm('¿Reemplazar todos los datos actuales con este respaldo?')) return;
+      db = {
+        productos: d.productos,
+        ventas: d.ventas,
+        proveedores: Array.isArray(d.proveedores) ? d.proveedores : [],
+        clientes: Array.isArray(d.clientes) ? d.clientes : []
+      };
+      guardar();
+      aviso('Respaldo restaurado ✔');
+      render();
+    } catch (e) { aviso('Ese archivo no es un respaldo válido', 4000); }
+  };
+  r.readAsText(file);
+}
+
+/* ---------- eventos ---------- */
+document.addEventListener('click', (e) => {
+  const go = e.target.closest('[data-go]');
+  if (go) { ir(go.dataset.go); return; }
+  const b = e.target.closest('[data-act]');
+  if (!b) return;
+  const { id, nombre } = b.dataset;
+  const acciones = {
+    volver: () => history.back(),
+    abonar: () => abonar(nombre),
+    recordar: () => recordar(nombre),
+    compra: () => compra(id),
+    cambiarPrecio: () => cambiarPrecio(id),
+    borrarProd: () => borrarProd(id),
+    borrarProv: () => borrarProv(id),
+    borrarVenta: () => borrarVenta(id),
+    exportar: () => exportar(),
+    leerCodigo: () => $('#fcod').click()
+  };
+  if (acciones[b.dataset.act]) acciones[b.dataset.act]();
+});
+
+document.addEventListener('submit', (e) => {
+  e.preventDefault();
+  const f = e.target;
+  const handlers = { venta: () => guardarVenta(f), prod: () => guardarProd(f), prov: () => guardarProv(f) };
+  if (handlers[f.dataset.form]) handlers[f.dataset.form]();
+});
+
+function onLive(el) {
+  switch (el.dataset.live) {
+    case 'prodVenta': {
+      const p = db.productos.find(x => x.id === el.value);
+      if (p) el.form.precio.value = p.precio;
+      actualizarTotal(el.form);
+      return;
+    }
+    case 'multi': return actualizarPrecioProd(el.form);
+    case 'precio': return actualizarEstimador();
+    case 'periodo': periodo = el.value; return render();
+    case 'leerCodigo': return leerCodigoDeFoto(el.files[0]);
+    case 'restaurar': return restaurar(el.files[0]);
+  }
+  if (el.form && el.form.dataset.form === 'venta') actualizarTotal(el.form);
+}
+document.addEventListener('input', (e) => onLive(e.target));
+document.addEventListener('change', (e) => onLive(e.target));
+
+render();
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
+</script>
+</body>
+</html>
