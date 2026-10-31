@@ -1,4 +1,4 @@
-const CACHE = 'cuaderno-ventas-v3'; // subir el número cada vez que cambie index.html
+const CACHE = 'cuaderno-ventas-v4'; // subir el número cada vez que cambie index.html
 const ARCHIVOS = ['./', 'index.html', 'manifest.json', 'icon.svg'];
 
 self.addEventListener('install', (e) => {
