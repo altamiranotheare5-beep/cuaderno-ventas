@@ -1,3 +1,7 @@
+Claude
+
+
+Index · HTML
 <!DOCTYPE html>
 <html lang="es-CL">
 <head>
@@ -47,14 +51,18 @@ legend{font-weight:bold;padding:0 6px}
 </header>
 <main id="vista"></main>
 <div id="aviso" class="aviso hidden"></div>
-
+ 
 <script>
 const KEY = 'cuadernoVentas.v1';
 const $ = (s) => document.querySelector(s);
+const OPCIONES_MULT = [['1.5', 'La mitad más (×1.5)'], ['2', 'El doble (×2)'], ['2.5', '2,5 veces (×2.5)'], ['3', 'El triple (×3)']];
 let db = cargar();
 let periodo = 'mes';
+let filtroCat = 'Todas';
+let pendingCodigo = ''; // código leído con la cámara, esperando el formulario de producto
+let pendingFoto = '';   // foto tomada con la cámara, esperando el formulario de producto
 let avisoT;
-
+ 
 /* ---------- almacenamiento ---------- */
 function cargar() {
   const vacio = { productos: [], ventas: [], proveedores: [], clientes: [] };
@@ -65,7 +73,7 @@ function guardar() {
   try { localStorage.setItem(KEY, JSON.stringify(db)); return true; }
   catch (e) { aviso('No hay espacio para guardar. Haz un respaldo y borra productos con foto que ya no uses.', 5000); return false; }
 }
-
+ 
 /* ---------- ayudas ---------- */
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 const clp = (n) => new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP' }).format(Math.round(n || 0));
@@ -79,7 +87,9 @@ const saldo = (v) => Math.max(0, v.total - v.pagado);
 const ganancia = (v) => (v.precio - v.costo) * v.cantidad;
 const deudaTotal = () => db.ventas.reduce((a, v) => a + saldo(v), 0);
 const diasDesde = (fecha) => Math.round((new Date(hoy() + 'T00:00') - new Date(fecha + 'T00:00')) / 864e5);
-
+const catDe = (p) => p.categoria || 'Sin categoría';
+const enFiltro = (p) => filtroCat === 'Todas' || catDe(p) === filtroCat;
+ 
 // Devuelve [nombre, monto adeudado, fecha de la deuda más antigua], ordenado por monto
 function deudores() {
   const m = {};
@@ -94,14 +104,14 @@ function deudores() {
   });
   return Object.entries(m).map(([n, d]) => [n, d.monto, d.desde]).sort((a, b) => b[1] - a[1]);
 }
-
+ 
 // Acepta 912345678, 9 1234 5678 o +56 9 1234 5678 y devuelve 569XXXXXXXX
 function normTel(s) {
   let d = String(s).replace(/\D/g, '');
   if (d.length === 9 && d[0] === '9') d = '56' + d;
   return (d.length === 11 && d.startsWith('569')) ? d : '';
 }
-
+ 
 function aviso(msg, ms = 2500) {
   const a = $('#aviso');
   a.textContent = msg;
@@ -109,7 +119,7 @@ function aviso(msg, ms = 2500) {
   clearTimeout(avisoT);
   avisoT = setTimeout(() => a.classList.add('hidden'), ms);
 }
-
+ 
 function comprimir(file) { // reduce la foto para que quepa en el almacenamiento del celular
   return new Promise((res, rej) => {
     if (!file) return res('');
@@ -128,22 +138,46 @@ function comprimir(file) { // reduce la foto para que quepa en el almacenamiento
     img.src = url;
   });
 }
-
-async function leerCodigoDeFoto(file) {
-  if (!file) return;
-  if (!('BarcodeDetector' in window)) return aviso('Este navegador no puede leer códigos. Escríbelo a mano.', 4000);
+ 
+// Lee el código de barras de una foto. Devuelve el código o null.
+async function leerCodigo(file) {
+  if (!file || !('BarcodeDetector' in window)) return null;
   try {
     const bmp = await createImageBitmap(file);
     const det = new BarcodeDetector({ formats: ['ean_13', 'ean_8', 'upc_a', 'code_128', 'qr_code'] });
     const r = await det.detect(bmp);
-    if (r.length) { $('#codigo').value = r[0].rawValue; aviso('Código leído ✔'); }
-    else aviso('No encontré un código. Intenta con más luz.', 4000);
-  } catch (e) { aviso('No se pudo leer el código', 4000); }
+    return r.length ? r[0].rawValue : null;
+  } catch (e) { return null; }
 }
-
+ 
+async function leerCodigoDeFoto(file) {
+  if (!file) return;
+  if (!('BarcodeDetector' in window)) return aviso('Este navegador no puede leer códigos. Escríbelo a mano.', 4000);
+  const cod = await leerCodigo(file);
+  if (cod) { $('#codigo').value = cod; aviso('Código leído ✔'); }
+  else aviso('No encontré un código. Intenta con más luz.', 4000);
+}
+ 
+// Desde Productos: foto o código. Si el producto ya existe, anota la compra; si no, abre el formulario con los datos.
+async function escanearParaAgregar(file) {
+  if (!file) return;
+  const cod = await leerCodigo(file);
+  if (cod) {
+    const existente = db.productos.find(p => p.codigo === cod);
+    if (existente) {
+      aviso(`Ya lo tienes: ${existente.nombre}. Anota la compra.`, 3500);
+      return compra(existente.id);
+    }
+  }
+  pendingCodigo = cod || '';
+  pendingFoto = await comprimir(file).catch(() => '');
+  aviso(cod ? 'Código leído. Completa los datos del producto.' : 'Foto lista. Completa los datos del producto.', 3500);
+  ir('nuevoProd');
+}
+ 
 /* ---------- vistas ---------- */
 const TITULOS = { inicio: 'Mi Cuaderno de Ventas', vender: 'Vender', deben: 'Me deben', productos: 'Productos', nuevoProd: 'Nuevo producto', proveedores: 'Proveedores', precio: 'Calcular precio', ganancias: 'Ganancias', respaldo: 'Respaldo' };
-
+ 
 function vInicio() {
   const botones = [['vender', '🛒', 'Vender'], ['deben', '📒', 'Me deben'], ['productos', '📦', 'Productos'], ['ganancias', '💰', 'Ganancias'], ['proveedores', '🚚', 'Proveedores'], ['precio', '🏷️', 'Calcular precio'], ['respaldo', '💾', 'Respaldo']];
   const atrasados = deudores().filter(d => diasDesde(d[2]) >= 7);
@@ -156,7 +190,7 @@ function vInicio() {
     <div class="kpi"><span>Le deben en total</span><b class="debe">${clp(deudaTotal())}</b></div>
     <div class="kpi"><span>Productos</span><b>${db.productos.length}</b></div>`;
 }
-
+ 
 function vVender() {
   const disp = db.productos.filter(p => p.stock > 0);
   if (!disp.length) return `<div class="vacio">Primero agrega productos en <b>Productos</b>.</div>`;
@@ -176,7 +210,7 @@ function vVender() {
     <button class="btn">Guardar venta</button>
   </form>`;
 }
-
+ 
 function vDeben() {
   const lista = deudores();
   if (!lista.length) return `<div class="vacio">Nadie le debe nada 🎉</div>`;
@@ -192,16 +226,16 @@ function vDeben() {
         </div></div></div>`;
     }).join('');
 }
-
+ 
 function vProductos() {
   const cards = db.productos.map(p => {
     const gan = db.ventas.filter(v => v.productoId === p.id).reduce((a, v) => a + ganancia(v), 0);
     const foto = p.foto ? `<img src="${p.foto}" alt="">` : `<div class="sinfoto">📦</div>`;
     return `<div class="card">${foto}
       <div class="info"><b>${esc(p.nombre)}</b>
-        <div>Quedan: <b>${p.stock}</b> · Precio: ${clp(p.precio)}</div>
-        <div>Costo: ${clp(p.costo)} · Ganas ${clp(p.precio - p.costo)} por unidad</div>
-        <div>Invertido: ${clp(p.invertido)}</div>
+        <div>${esc(catDe(p))} · Quedan: <b>${p.stock}</b></div>
+        <div>Precio: ${clp(p.precio)} · Costo: ${clp(p.costo)}</div>
+        <div>Ganas ${clp(p.precio - p.costo)} por unidad · Invertido: ${clp(p.invertido)}</div>
         <div class="ok">Ganado hasta ahora: ${clp(gan)}</div>
         <div class="acc">
           <button class="btn2" type="button" data-act="compra" data-id="${p.id}">+ Compré más</button>
@@ -209,30 +243,34 @@ function vProductos() {
           <button class="btn2 peligro" type="button" data-act="borrarProd" data-id="${p.id}">Borrar</button>
         </div></div></div>`;
   }).join('');
-  return `<button class="btn" data-go="nuevoProd">+ Agregar producto</button>` +
+  return `<button class="btn" type="button" data-act="camAgregar">📷 Agregar con foto o código</button>
+    <input type="file" id="fcam" accept="image/*" capture="environment" data-live="escanearAgregar" style="display:none">
+    <button class="btn2" type="button" data-go="nuevoProd" style="width:100%;margin-top:8px">+ Agregar a mano</button>` +
     (cards || `<div class="vacio">Aún no tienes productos.</div>`);
 }
-
+ 
 function vNuevoProd() {
+  const cats = [...new Set(db.productos.map(catDe))].sort();
+  const fotoLista = pendingFoto ? `<p class="ok">📷 Foto tomada ✔ (se guardará con el producto)</p>` : '';
   return `<form data-form="prod">
+    ${fotoLista}
     <label>Foto del producto<input name="foto" type="file" accept="image/*" capture="environment"></label>
     <label>Nombre<input name="nombre" required placeholder="Ej: Olla de acero 20 cm"></label>
-    <label>Código de barras (opcional)<input name="codigo" id="codigo" inputmode="numeric"></label>
+    <label>Categoría<input name="categoria" list="cats" autocomplete="off" placeholder="Ej: Ollas, Perfumes, Toallas"></label>
+    <datalist id="cats">${cats.filter(c => c !== 'Sin categoría').map(c => `<option value="${esc(c)}">`).join('')}</datalist>
+    <label>Código de barras (opcional)<input name="codigo" id="codigo" inputmode="numeric" value="${esc(pendingCodigo)}"></label>
     <button class="btn2" type="button" data-act="leerCodigo">📷 Leer código desde una foto</button>
     <input type="file" id="fcod" accept="image/*" capture="environment" data-live="leerCodigo" style="display:none">
     <label>¿Cuánto te costó cada una?<input name="costo" type="number" min="1" inputmode="numeric" required data-live="multi"></label>
     <label>¿Cuánto quieres ganar?<select name="multiplo" data-live="multi">
-      <option value="1.5">La mitad más (×1.5)</option>
-      <option value="2" selected>El doble (×2)</option>
-      <option value="2.5">2,5 veces (×2.5)</option>
-      <option value="3">El triple (×3)</option>
+      ${OPCIONES_MULT.map(([v, t]) => `<option value="${v}" ${v === '2' ? 'selected' : ''}>${t}</option>`).join('')}
     </select></label>
     <p class="total" id="precioProd">Escribe el costo para ver el precio de venta</p>
     <label>¿Cuántas unidades tienes ahora?<input name="cantidad" type="number" min="0" value="1" inputmode="numeric" required></label>
     <button class="btn">Guardar producto</button>
   </form>`;
 }
-
+ 
 function vProveedores() {
   const lista = db.proveedores.map(p => `<div class="card"><div class="info"><b>${esc(p.nombre)}</b>
       <div>${esc(p.vende)}</div>
@@ -245,14 +283,35 @@ function vProveedores() {
     <button class="btn">Guardar proveedor</button>
   </form>${lista || `<div class="vacio">Aún no hay proveedores.</div>`}`;
 }
-
+ 
 function vPrecio() {
-  return `<form data-form="noop">
-    <label>¿Cuánto te costó cada unidad?<input id="costo" type="number" min="0" inputmode="numeric" data-live="precio" placeholder="Ej: 2000"></label>
-  </form>
-  <div id="tablaPrecio" class="vacio">Escribe el costo para ver los precios sugeridos.</div>`;
+  const cats = [...new Set(db.productos.map(catDe))].sort();
+  if (filtroCat !== 'Todas' && !cats.includes(filtroCat)) filtroCat = 'Todas';
+  const lista = db.productos.filter(enFiltro);
+  const opciones = ['Todas', ...cats].map(c => `<option value="${esc(c)}" ${c === filtroCat ? 'selected' : ''}>${c === 'Todas' ? 'Todas las categorías' : esc(c)}</option>`).join('');
+  const multOpts = OPCIONES_MULT.map(([v, t]) => `<option value="${v}" ${v === '2' ? 'selected' : ''}>${t}</option>`).join('');
+  const filas = lista.map(p => {
+    const m = String(p.multiplo || 2);
+    return `<div class="card"><div class="info"><b>${esc(p.nombre)}</b>
+      <div>Costo: ${clp(p.costo)} · Precio de venta: <b>${clp(p.precio)}</b></div>
+      <label>Cuánto quiero ganar<select data-live="multiProd" data-id="${p.id}">
+        ${OPCIONES_MULT.map(([v, t]) => `<option value="${v}" ${v === m ? 'selected' : ''}>${t}</option>`).join('')}
+      </select></label></div></div>`;
+  }).join('');
+  return `<label>¿Qué quieres calcular?<select data-live="filtroCat">${opciones}</select></label>
+    ${lista.length ? `
+      <div class="card" style="display:block"><b>Calcular estos ${lista.length} de una vez</b>
+        <select id="multAll" style="margin-top:8px">${multOpts}</select>
+        <button class="btn" type="button" data-act="aplicarMult">Calcular precios</button>
+      </div>` : ''}
+    ${filas || `<div class="vacio">No tienes productos en esta categoría.</div>`}
+    <h3>Calcular un costo suelto</h3>
+    <form data-form="noop">
+      <label>¿Cuánto te costó cada unidad?<input id="costo" type="number" min="0" inputmode="numeric" data-live="precio" placeholder="Ej: 2000"></label>
+    </form>
+    <div id="tablaPrecio" class="vacio">Escribe el costo para ver los precios sugeridos.</div>`;
 }
-
+ 
 function vGanancias() {
   const h = hoy();
   const v = db.ventas.filter(x => periodo === 'todo' || (periodo === 'hoy' ? x.fecha === h : x.fecha.slice(0, 7) === h.slice(0, 7)));
@@ -272,7 +331,7 @@ function vGanancias() {
     <h3>Ventas</h3>
     ${lista || `<div class="vacio">No hay ventas en este período.</div>`}`;
 }
-
+ 
 function vRespaldo() {
   return `<p>Guarda una copia de tus datos en el celular o en tu Google Drive. Así no los pierdes si se borra el navegador.</p>
     <button class="btn" type="button" data-act="exportar">💾 Guardar respaldo</button>
@@ -281,27 +340,28 @@ function vRespaldo() {
     <input type="file" accept="application/json,.json" data-live="restaurar">
     <p class="info">Datos guardados: ${db.ventas.length} ventas y ${db.productos.length} productos.</p>`;
 }
-
+ 
 const VISTAS = { inicio: vInicio, vender: vVender, deben: vDeben, productos: vProductos, nuevoProd: vNuevoProd, proveedores: vProveedores, precio: vPrecio, ganancias: vGanancias, respaldo: vRespaldo };
-
+ 
 function ruta() { const h = (location.hash || '#inicio').slice(1); return VISTAS[h] ? h : 'inicio'; }
 function ir(v) { location.hash = v; }
 function render() {
   const r = ruta();
+  if (r !== 'nuevoProd') { pendingCodigo = ''; pendingFoto = ''; }
   $('#titulo').textContent = TITULOS[r];
   $('#volver').classList.toggle('hidden', r === 'inicio');
   $('#vista').innerHTML = VISTAS[r]();
   if (r === 'vender') actualizarTotal($('form'));
 }
 window.addEventListener('hashchange', render);
-
+ 
 /* ---------- acciones ---------- */
 function actualizarTotal(f) {
   const t = (+f.precio.value || 0) * (+f.cantidad.value || 0);
   const quedaDebiendo = f.pago.value === 'debe' ? Math.max(0, t - (+f.abono.value || 0)) : 0;
   $('#totalVenta').innerHTML = `Total: ${clp(t)}${quedaDebiendo ? `<br><span class="debe">Quedará debiendo: ${clp(quedaDebiendo)}</span>` : ''}`;
 }
-
+ 
 function actualizarPrecioProd(f) {
   const c = +f.costo.value || 0;
   const pv = redondear(c * (+f.multiplo.value));
@@ -309,7 +369,7 @@ function actualizarPrecioProd(f) {
     ? `Precio de venta: <b>${clp(pv)}</b><br><small class="ok">Ganas ${clp(pv - c)} por unidad</small>`
     : 'Escribe el costo para ver el precio de venta';
 }
-
+ 
 function actualizarEstimador() {
   const costo = +$('#costo').value;
   const box = $('#tablaPrecio');
@@ -321,7 +381,18 @@ function actualizarEstimador() {
       <span style="text-align:right"><b>${clp(pv)}</b><br><small class="ok">Ganas ${clp(pv - costo)} por unidad</small></span></div>`;
   }).join('');
 }
-
+ 
+// Aplica una misma ganancia a todos los productos de la lista que se está viendo
+function aplicarMultFiltrados() {
+  const m = +$('#multAll').value;
+  const lista = db.productos.filter(enFiltro);
+  if (!lista.length) return;
+  lista.forEach(p => { p.multiplo = m; p.precio = redondear(p.costo * m); });
+  guardar();
+  aviso(`Listo: ${lista.length} ${lista.length === 1 ? 'producto calculado' : 'productos calculados'}`);
+  render();
+}
+ 
 function guardarVenta(f) {
   const p = db.productos.find(x => x.id === f.producto.value);
   const cant = Math.floor(+f.cantidad.value);
@@ -341,24 +412,29 @@ function guardarVenta(f) {
   aviso(pagado < total ? 'Venta anotada. Quedó debiendo ✔' : 'Venta anotada ✔');
   render();
 }
-
+ 
 async function guardarProd(f) {
   const nombre = f.nombre.value.trim();
   const cant = Math.floor(+f.cantidad.value);
   const costo = Math.round(+f.costo.value);
   const multiplo = +f.multiplo.value;
+  const codigo = f.codigo.value.trim();
   if (!nombre) return aviso('Escribe el nombre');
   if (!(cant >= 0) || !(costo > 0)) return aviso('Revisa cantidad y costo');
+  if (codigo && db.productos.some(p => p.codigo === codigo)) return aviso('Ya existe un producto con ese código de barras');
   const precio = redondear(costo * multiplo); // precio de ganancia
-  let foto = '';
-  try { foto = await comprimir(f.foto.files[0]); }
-  catch (e) { aviso('No se pudo leer la foto; se guarda sin foto', 3500); }
-  db.productos.push({ id: uid(), nombre, codigo: f.codigo.value.trim(), foto, stock: cant, costo, multiplo, precio, invertido: cant * costo });
+  let foto = pendingFoto;
+  if (f.foto.files[0]) {
+    try { foto = await comprimir(f.foto.files[0]); }
+    catch (e) { aviso('No se pudo leer la foto; se guarda sin foto', 3500); }
+  }
+  db.productos.push({ id: uid(), nombre, categoria: f.categoria.value.trim() || 'Sin categoría', codigo, foto, stock: cant, costo, multiplo, precio, invertido: cant * costo });
+  pendingCodigo = ''; pendingFoto = '';
   if (!guardar()) return;
   aviso('Producto guardado ✔');
   ir('productos');
 }
-
+ 
 function guardarProv(f) {
   const nombre = f.nombre.value.trim();
   if (!nombre) return aviso('Escribe el nombre del proveedor');
@@ -367,7 +443,7 @@ function guardarProv(f) {
   aviso('Proveedor guardado ✔');
   render();
 }
-
+ 
 function abonar(nombre) {
   const monto = Math.round(Number(prompt(`¿Cuánto pagó ${nombre}?`)));
   if (!(monto > 0)) return;
@@ -379,7 +455,7 @@ function abonar(nombre) {
   aviso(`Abono de ${clp(monto)} anotado` + (resto > 0 ? `. Sobraron ${clp(resto)}` : ''), 3500);
   render();
 }
-
+ 
 // Abre WhatsApp con un mensaje de cobro. Pide el número la primera vez y lo guarda.
 function recordar(nombre) {
   const monto = (deudores().find(d => d[0] === nombre) || [0, 0])[1];
@@ -399,7 +475,7 @@ function recordar(nombre) {
   const msg = `Hola ${nombre}, le recuerdo que tiene un saldo pendiente de ${clp(monto)}. ¡Muchas gracias!`;
   window.open(`https://wa.me/${tel}?text=${encodeURIComponent(msg)}`, '_blank');
 }
-
+ 
 function compra(id) {
   const p = db.productos.find(x => x.id === id);
   if (!p) return;
@@ -415,7 +491,7 @@ function compra(id) {
   aviso(`Compra anotada. Nuevo precio: ${clp(p.precio)}`, 3500);
   render();
 }
-
+ 
 function cambiarPrecio(id) {
   const p = db.productos.find(x => x.id === id);
   if (!p) return;
@@ -425,19 +501,19 @@ function cambiarPrecio(id) {
   guardar();
   render();
 }
-
+ 
 function borrarProd(id) {
   if (!confirm('¿Borrar este producto? Las ventas anteriores se mantienen.')) return;
   db.productos = db.productos.filter(x => x.id !== id);
   guardar(); render();
 }
-
+ 
 function borrarProv(id) {
   if (!confirm('¿Borrar este proveedor?')) return;
   db.proveedores = db.proveedores.filter(x => x.id !== id);
   guardar(); render();
 }
-
+ 
 function borrarVenta(id) {
   const v = db.ventas.find(x => x.id === id);
   if (!v || !confirm('¿Borrar esta venta? Se devuelven las unidades al stock.')) return;
@@ -446,7 +522,7 @@ function borrarVenta(id) {
   db.ventas = db.ventas.filter(x => x.id !== id);
   guardar(); render();
 }
-
+ 
 function exportar() {
   const blob = new Blob([JSON.stringify(db)], { type: 'application/json' });
   const a = document.createElement('a');
@@ -457,7 +533,7 @@ function exportar() {
   a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
-
+ 
 function restaurar(file) {
   if (!file) return;
   const r = new FileReader();
@@ -479,7 +555,7 @@ function restaurar(file) {
   };
   r.readAsText(file);
 }
-
+ 
 /* ---------- eventos ---------- */
 document.addEventListener('click', (e) => {
   const go = e.target.closest('[data-go]');
@@ -489,6 +565,8 @@ document.addEventListener('click', (e) => {
   const { id, nombre } = b.dataset;
   const acciones = {
     volver: () => history.back(),
+    camAgregar: () => $('#fcam').click(),
+    aplicarMult: () => aplicarMultFiltrados(),
     abonar: () => abonar(nombre),
     recordar: () => recordar(nombre),
     compra: () => compra(id),
@@ -501,14 +579,14 @@ document.addEventListener('click', (e) => {
   };
   if (acciones[b.dataset.act]) acciones[b.dataset.act]();
 });
-
+ 
 document.addEventListener('submit', (e) => {
   e.preventDefault();
   const f = e.target;
   const handlers = { venta: () => guardarVenta(f), prod: () => guardarProd(f), prov: () => guardarProv(f) };
   if (handlers[f.dataset.form]) handlers[f.dataset.form]();
 });
-
+ 
 function onLive(el) {
   switch (el.dataset.live) {
     case 'prodVenta': {
@@ -518,18 +596,28 @@ function onLive(el) {
       return;
     }
     case 'multi': return actualizarPrecioProd(el.form);
+    case 'multiProd': {
+      const p = db.productos.find(x => x.id === el.dataset.id);
+      if (p) { p.multiplo = +el.value; p.precio = redondear(p.costo * p.multiplo); guardar(); }
+      return render();
+    }
+    case 'filtroCat': filtroCat = el.value; return render();
     case 'precio': return actualizarEstimador();
     case 'periodo': periodo = el.value; return render();
     case 'leerCodigo': return leerCodigoDeFoto(el.files[0]);
+    case 'escanearAgregar': { const f = el.files[0]; el.value = ''; return escanearParaAgregar(f); }
     case 'restaurar': return restaurar(el.files[0]);
   }
   if (el.form && el.form.dataset.form === 'venta') actualizarTotal(el.form);
 }
-document.addEventListener('input', (e) => onLive(e.target));
+// Los archivos reaccionan solo a 'change' (en el celular 'input' y 'change' se disparan juntos)
+document.addEventListener('input', (e) => { if (e.target.type !== 'file') onLive(e.target); });
 document.addEventListener('change', (e) => onLive(e.target));
-
+ 
 render();
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 </script>
 </body>
 </html>
+ 
+Claude terminó la respuesta
